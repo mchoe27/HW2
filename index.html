@@ -1,0 +1,718 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Technical Debt Dashboard</title>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+    * { font-family: 'Inter', system-ui, sans-serif; }
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #374151; border-radius: 2px; }
+  </style>
+</head>
+<body class="bg-gray-950">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useRef, useEffect } = React;
+
+    // ── Simulation constants ──────────────────────────────────────────────────
+
+    const INIT = {
+      progress: 10, debt: 10, bugs: 5,
+      velocity: 12, baseVelocity: 12, morale: 80,
+      teamSize: 3, sprint: 1, log: [], done: false, outcome: null,
+    };
+
+    const ELEMENTS = [
+      {
+        name: "Progress",
+        desc: "How much of the product you have shipped. It is the most visible metric, but not always the most truthful one.",
+        dot: "bg-blue-400", accent: "border-blue-500/30 hover:border-blue-500/60",
+        glow: "rgba(59,130,246,0.06)",
+      },
+      {
+        name: "Technical Debt",
+        desc: "The hidden cost of shortcuts. It helps you move faster now, but creates friction, fragility, and slowdown later.",
+        dot: "bg-red-400", accent: "border-red-500/30 hover:border-red-500/60",
+        glow: "rgba(239,68,68,0.06)",
+      },
+      {
+        name: "Bugs",
+        desc: "Errors and failures that accumulate as systems grow more rushed and complex.",
+        dot: "bg-orange-400", accent: "border-orange-500/30 hover:border-orange-500/60",
+        glow: "rgba(249,115,22,0.06)",
+      },
+      {
+        name: "Velocity",
+        desc: "The speed at which your team can build. Debt and coordination overhead gradually reduce it.",
+        dot: "bg-emerald-400", accent: "border-emerald-500/30 hover:border-emerald-500/60",
+        glow: "rgba(52,211,153,0.06)",
+      },
+      {
+        name: "Team Size",
+        desc: "More people can increase capacity, but also create communication overhead and coordination costs.",
+        dot: "bg-purple-400", accent: "border-purple-500/30 hover:border-purple-500/60",
+        glow: "rgba(167,139,250,0.06)",
+      },
+      {
+        name: "Morale",
+        desc: "The human side of software work. Stress, disorder, and constant firefighting wear teams down over time.",
+        dot: "bg-pink-400", accent: "border-pink-500/30 hover:border-pink-500/60",
+        glow: "rgba(244,114,182,0.06)",
+      },
+    ];
+
+    // ── Metrics guide data ────────────────────────────────────────────────────
+
+    const GUIDE = [
+      {
+        name: "Progress", dot: "bg-blue-500",
+        ranges: [
+          { tier: "healthy", label: "Healthy", val: "40–100", note: "if debt & bugs stay controlled" },
+          { tier: "warning", label: "Warning", val: "—",      note: "high progress with rising debt or bugs" },
+          { tier: "danger",  label: "Danger",  val: "—",      note: "high progress while system stability fails" },
+        ],
+        meaning: "The most visible metric — but not the most truthful. Fast progress can hide structural weakness accumulating beneath the surface.",
+      },
+      {
+        name: "Technical Debt", dot: "bg-red-500",
+        ranges: [
+          { tier: "healthy", label: "Healthy", val: "0–20"  },
+          { tier: "warning", label: "Warning", val: "21–50" },
+          { tier: "danger",  label: "Danger",  val: "51+"   },
+        ],
+        meaning: "Debt acts like accumulated friction. Each shortcut costs more than it saved. Left unchecked, it throttles velocity and erodes morale.",
+      },
+      {
+        name: "Bugs", dot: "bg-orange-500",
+        ranges: [
+          { tier: "healthy", label: "Healthy", val: "0–15"  },
+          { tier: "warning", label: "Warning", val: "16–35" },
+          { tier: "danger",  label: "Danger",  val: "36+"   },
+        ],
+        meaning: "Bugs signal a loss of control. A rising count suggests rushed development — and each unresolved bug makes the codebase harder to reason about.",
+      },
+      {
+        name: "Velocity", dot: "bg-emerald-500",
+        ranges: [
+          { tier: "healthy", label: "Healthy", val: "12+", note: "pts / sprint" },
+          { tier: "warning", label: "Warning", val: "6–11", note: "pts / sprint" },
+          { tier: "danger",  label: "Danger",  val: "< 6", note: "pts / sprint" },
+        ],
+        meaning: "Reflects the team's real ability to keep building. A falling velocity means debt and coordination costs are overwhelming forward progress.",
+      },
+      {
+        name: "Team Size", dot: "bg-purple-500",
+        ranges: [
+          { tier: "healthy", label: "Healthy", val: "3–5", note: "developers" },
+          { tier: "warning", label: "Warning", val: "6–7", note: "developers" },
+          { tier: "danger",  label: "Danger",  val: "8+",  note: "developers" },
+        ],
+        meaning: "More people increase capacity, but also communication overhead. Headcount is not a substitute for reducing debt or improving process.",
+      },
+      {
+        name: "Morale", dot: "bg-pink-500",
+        ranges: [
+          { tier: "healthy", label: "Healthy", val: "70–100", note: "%" },
+          { tier: "warning", label: "Warning", val: "40–69",  note: "%" },
+          { tier: "danger",  label: "Danger",  val: "< 40",   note: "%" },
+        ],
+        meaning: "The human sustainability of the project. Low morale signals a team in reactive mode — constantly firefighting, never building with intention.",
+      },
+    ];
+
+    // ── Action definitions ────────────────────────────────────────────────────
+
+    const ACTIONS = [
+      {
+        key:   "ship",
+        label: "Ship Fast",
+        cls:   "bg-blue-900/60 hover:bg-blue-900/90 border-blue-700/50 hover:border-blue-600",
+        desc:  "Prioritize visible progress and fast release cycles.",
+        effects: [
+          { label: "Progress", dir: "↑",  cls: "text-blue-400"   },
+          { label: "Debt",     dir: "↑",  cls: "text-red-400"    },
+          { label: "Bugs",     dir: "↑",  cls: "text-orange-400" },
+          { label: "Velocity", dir: "↓",  cls: "text-yellow-400", note: "later" },
+          { label: "Morale",   dir: "↓",  cls: "text-yellow-400" },
+        ],
+        insight: "Short-term output at the cost of long-term fragility.",
+      },
+      {
+        key:   "refactor",
+        label: "Refactor",
+        cls:   "bg-emerald-900/60 hover:bg-emerald-900/90 border-emerald-700/50 hover:border-emerald-600",
+        desc:  "Pause feature delivery to clean up and reduce structural friction.",
+        effects: [
+          { label: "Debt",     dir: "↓",  cls: "text-emerald-400" },
+          { label: "Bugs",     dir: "↓",  cls: "text-emerald-400" },
+          { label: "Velocity", dir: "↑",  cls: "text-emerald-400", note: "over time" },
+          { label: "Progress", dir: "↑",  cls: "text-blue-400",    note: "slightly" },
+          { label: "Morale",   dir: "↑",  cls: "text-emerald-400" },
+        ],
+        insight: "Sacrifices immediate momentum to improve long-term sustainability.",
+      },
+      {
+        key:   "hire",
+        label: "Add Developer",
+        cls:   "bg-purple-900/60 hover:bg-purple-900/90 border-purple-700/50 hover:border-purple-600",
+        desc:  "Expand the team to increase capacity.",
+        effects: [
+          { label: "Team Size", dir: "↑", cls: "text-purple-400"                    },
+          { label: "Velocity",  dir: "↑", cls: "text-purple-400", note: "+ overhead" },
+          { label: "Debt",      dir: "↑", cls: "text-red-400",    note: "slightly"   },
+          { label: "Bugs",      dir: "↑", cls: "text-orange-400", note: "slightly"   },
+          { label: "Morale",    dir: "↓", cls: "text-yellow-400"                    },
+        ],
+        insight: "More people don't automatically solve complexity — coordination has a cost.",
+      },
+      {
+        key:   "stab",
+        label: "Stabilize",
+        cls:   "bg-amber-900/60 hover:bg-amber-900/90 border-amber-700/50 hover:border-amber-600",
+        desc:  "Focus on testing, debugging, and reducing system instability.",
+        effects: [
+          { label: "Bugs",     dir: "↓↓", cls: "text-emerald-400"                  },
+          { label: "Debt",     dir: "↓",  cls: "text-emerald-400", note: "slightly" },
+          { label: "Progress", dir: "↑",  cls: "text-blue-400",    note: "modestly" },
+          { label: "Morale",   dir: "↑",  cls: "text-emerald-400"                  },
+        ],
+        insight: "Emphasizes maintenance and reliability over new feature progress.",
+      },
+    ];
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
+    const clamp = (v, lo = 0, hi = Infinity) => Math.max(lo, Math.min(hi, v));
+
+    function calcVelocity(base, debt, team, bugs) {
+      let v = base - (debt * 0.15) - ((team - 3) * 2.5) - (bugs * 0.05);
+      if (debt > 75)      v *= 0.5;
+      else if (debt > 50) v *= 0.7;
+      if (bugs > 40)      v *= 0.8;
+      return Math.max(0, v);
+    }
+
+    function resolveOutcome({ progress, debt, bugs, velocity }) {
+      if (debt >= 80) return {
+        label: "Project Collapsed Under Technical Debt",
+        sub:   "The codebase became unmaintainable. The team spent every sprint firefighting instead of shipping.",
+        cls:   "border-red-500/50 bg-red-950/50 text-red-300",
+      };
+      if (bugs >= 70) return {
+        label: "Fast Growth, Fragile Product",
+        sub:   "You moved quickly but the product is riddled with bugs. Users are losing trust and the backlog is overwhelming.",
+        cls:   "border-orange-500/50 bg-orange-950/50 text-orange-300",
+      };
+      if (velocity <= 3) return {
+        label: "Stable but Paralyzed",
+        sub:   "The codebase is pristine, but the team can barely move. Over-investing in quality killed all momentum.",
+        cls:   "border-yellow-500/50 bg-yellow-950/50 text-yellow-300",
+      };
+      if (progress >= 80 && debt <= 30) return {
+        label: "Balanced & Sustainable",
+        sub:   "You shipped meaningful progress while keeping debt in check. This is what great engineering looks like.",
+        cls:   "border-emerald-500/50 bg-emerald-950/50 text-emerald-300",
+      };
+      if (progress >= 50) return {
+        label: "Decent Progress Made",
+        sub:   "The project moved forward with manageable debt. Solid result — there's room to improve the balance.",
+        cls:   "border-blue-500/50 bg-blue-950/50 text-blue-300",
+      };
+      return {
+        label: "Slow but Alive",
+        sub:   "The project survived but growth was limited. More aggressive shipping in early sprints would have helped.",
+        cls:   "border-slate-500/50 bg-slate-800/50 text-slate-300",
+      };
+    }
+
+    // ── FadeUp: staggered mount animation ─────────────────────────────────────
+
+    function FadeUp({ delay = 0, children, className = "" }) {
+      const [visible, setVisible] = useState(false);
+      useEffect(() => {
+        const t = setTimeout(() => setVisible(true), delay);
+        return () => clearTimeout(t);
+      }, []);
+      return (
+        <div
+          className={className}
+          style={{
+            opacity:    visible ? 1 : 0,
+            transform:  visible ? "translateY(0)" : "translateY(16px)",
+            transition: "opacity 0.5s ease, transform 0.5s ease",
+          }}
+        >
+          {children}
+        </div>
+      );
+    }
+
+    // ── Arrow icon ────────────────────────────────────────────────────────────
+
+    function Arrow() {
+      return (
+        <svg width="13" height="13" viewBox="0 0 13 13" fill="none" aria-hidden="true">
+          <path d="M1 6.5h11M6.5 1l5.5 5.5-5.5 5.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+        </svg>
+      );
+    }
+
+    // ── Phase 1: Intro ────────────────────────────────────────────────────────
+
+    function IntroScreen({ onNext }) {
+      return (
+        <div className="min-h-screen bg-gray-950 flex flex-col items-center justify-center px-6 py-16 relative overflow-hidden">
+
+          <div className="absolute inset-0 pointer-events-none" style={{
+            background: [
+              "radial-gradient(ellipse 80% 55% at 50% 0%, rgba(99,102,241,0.11) 0%, transparent 65%)",
+              "radial-gradient(ellipse 50% 40% at 15% 85%, rgba(59,130,246,0.06) 0%, transparent 55%)",
+              "radial-gradient(ellipse 40% 30% at 85% 70%, rgba(167,139,250,0.06) 0%, transparent 55%)",
+            ].join(", "),
+          }} />
+
+          <div className="absolute inset-0 pointer-events-none opacity-[0.03]" style={{
+            backgroundImage: "radial-gradient(circle, #fff 1px, transparent 1px)",
+            backgroundSize:  "32px 32px",
+          }} />
+
+          <div className="max-w-md w-full text-center relative z-10">
+
+            <FadeUp delay={0} className="flex justify-center mb-8">
+              <span className="inline-flex items-center gap-2 bg-gray-900/80 border border-gray-700/60 rounded-full px-4 py-1.5 backdrop-blur-sm">
+                <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
+                <span className="text-[11px] font-medium text-gray-400 tracking-widest uppercase">Interactive Simulation</span>
+              </span>
+            </FadeUp>
+
+            <FadeUp delay={120}>
+              <h1 className="font-bold tracking-tight leading-tight mb-5">
+                <span className="block text-4xl sm:text-5xl text-white mb-1">Technical Debt</span>
+                <span className="block text-3xl sm:text-4xl" style={{
+                  background: "linear-gradient(135deg, #94a3b8 0%, #64748b 100%)",
+                  WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent",
+                }}>Dashboard</span>
+              </h1>
+            </FadeUp>
+
+            <FadeUp delay={230}>
+              <p className="text-gray-300 text-base sm:text-lg leading-relaxed mb-5 font-light">
+                You are a startup founder. Every sprint, you must balance{" "}
+                <span className="text-white font-medium">speed</span>,{" "}
+                <span className="text-white font-medium">stability</span>,{" "}
+                <span className="text-white font-medium">team growth</span>, and{" "}
+                <span className="text-white font-medium">long-term sustainability</span>.
+              </p>
+            </FadeUp>
+
+            <FadeUp delay={340}>
+              <p className="text-gray-500 text-sm leading-relaxed mb-10 max-w-sm mx-auto">
+                Shortcuts can accelerate progress now while quietly making the system harder to maintain later.
+                Your goal is not simply to ship fast, but to survive the consequences of your decisions.
+              </p>
+            </FadeUp>
+
+            <FadeUp delay={450} className="flex justify-center">
+              <button
+                onClick={onNext}
+                className="inline-flex items-center gap-2.5 bg-white text-gray-950 font-semibold px-7 py-3 rounded-xl text-sm hover:bg-gray-100 active:scale-95 transition-all cursor-pointer shadow-xl shadow-white/10"
+              >
+                Begin Simulation
+                <Arrow />
+              </button>
+            </FadeUp>
+
+          </div>
+        </div>
+      );
+    }
+
+    // ── Phase 2: Elements ─────────────────────────────────────────────────────
+
+    function ElementsScreen({ onNext }) {
+      return (
+        <div className="min-h-screen bg-gray-950 flex flex-col items-center justify-center px-6 py-12">
+          <div className="max-w-2xl w-full">
+
+            <FadeUp delay={0} className="text-center mb-8">
+              <p className="text-[11px] font-semibold text-blue-400 uppercase tracking-widest mb-3">
+                6 Core Elements
+              </p>
+              <h2 className="text-2xl font-bold text-white tracking-tight mb-2">
+                What you're managing
+              </h2>
+              <p className="text-gray-500 text-sm max-w-sm mx-auto">
+                These six metrics govern your project. Every decision you make will shift them — often in ways you didn't intend.
+              </p>
+            </FadeUp>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-8">
+              {ELEMENTS.map((el, i) => (
+                <FadeUp key={el.name} delay={80 + i * 65}>
+                  <div
+                    className={`border rounded-2xl p-4 transition-colors duration-300 ${el.accent}`}
+                    style={{ background: el.glow }}
+                  >
+                    <div className="flex items-center gap-2.5 mb-2">
+                      <span className={`w-2 h-2 rounded-full shrink-0 ${el.dot}`} />
+                      <span className="text-sm font-semibold text-white">{el.name}</span>
+                    </div>
+                    <p className="text-[13px] text-gray-400 leading-relaxed pl-[18px]">
+                      {el.desc}
+                    </p>
+                  </div>
+                </FadeUp>
+              ))}
+            </div>
+
+            <FadeUp delay={500} className="flex justify-center">
+              <button
+                onClick={onNext}
+                className="inline-flex items-center gap-2.5 bg-white text-gray-950 font-semibold px-7 py-3 rounded-xl text-sm hover:bg-gray-100 active:scale-95 transition-all cursor-pointer shadow-xl shadow-white/10"
+              >
+                Enter Dashboard
+                <Arrow />
+              </button>
+            </FadeUp>
+
+          </div>
+        </div>
+      );
+    }
+
+    // ── Metric card ───────────────────────────────────────────────────────────
+
+    function MetricCard({ label, value, unit = "", note, barPct, barCls }) {
+      return (
+        <div className="bg-gray-900/60 border border-gray-800/80 rounded-2xl p-4 flex flex-col gap-1 backdrop-blur-sm">
+          <span className="text-[10px] font-semibold text-gray-500 uppercase tracking-widest">
+            {label}
+          </span>
+          <span className="text-3xl font-bold text-white leading-none tabular-nums">
+            {value}{unit}
+          </span>
+          {barPct !== undefined && (
+            <div className="mt-2 h-1 bg-gray-800 rounded-full overflow-hidden">
+              <div
+                className={`h-full rounded-full transition-all duration-500 ${barCls}`}
+                style={{ width: `${Math.min(barPct, 100)}%` }}
+              />
+            </div>
+          )}
+          {note && <span className="text-[11px] text-gray-600 mt-0.5">{note}</span>}
+        </div>
+      );
+    }
+
+    // ── Metrics guide section ─────────────────────────────────────────────────
+
+    const TIER_CLS = {
+      healthy: "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20",
+      warning: "bg-yellow-500/10  text-yellow-400  border border-yellow-500/20",
+      danger:  "bg-red-500/10     text-red-400     border border-red-500/20",
+    };
+
+    function MetricsGuide() {
+      return (
+        <div className="mt-12 border-t border-gray-800/50 pt-10 pb-8">
+
+          <div className="mb-7">
+            <p className="text-[10px] font-semibold text-gray-600 uppercase tracking-widest mb-2">
+              Reference
+            </p>
+            <h2 className="text-base font-bold text-white tracking-tight mb-3">
+              How to Read the System
+            </h2>
+            <p className="text-[13px] text-gray-400 leading-relaxed max-w-lg">
+              A healthy project is not one that simply maximizes progress. It balances visible output
+              with maintainability, stability, sustainable team dynamics, and long-term development capacity.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-7">
+            {GUIDE.map(m => (
+              <div key={m.name} className="bg-gray-900/40 border border-gray-800/60 rounded-2xl p-4">
+                <div className="flex items-center gap-2 mb-3">
+                  <span className={`w-2 h-2 rounded-full shrink-0 ${m.dot}`} />
+                  <span className="text-sm font-semibold text-white">{m.name}</span>
+                </div>
+                <div className="space-y-1.5 mb-3">
+                  {m.ranges.map(r => (
+                    <div key={r.label} className="flex items-baseline gap-2.5">
+                      <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-md shrink-0 w-[52px] text-center ${TIER_CLS[r.tier]}`}>
+                        {r.label}
+                      </span>
+                      <span className="text-xs text-gray-300 tabular-nums font-medium">{r.val}</span>
+                      {r.note && <span className="text-[11px] text-gray-600">{r.note}</span>}
+                    </div>
+                  ))}
+                </div>
+                <p className="text-[12px] text-gray-500 leading-relaxed border-t border-gray-800/50 pt-3">
+                  {m.meaning}
+                </p>
+              </div>
+            ))}
+          </div>
+
+          <p className="text-[12px] text-gray-600 leading-relaxed text-center max-w-sm mx-auto italic">
+            "Software projects can appear successful in the short term while quietly becoming more fragile underneath."
+          </p>
+
+        </div>
+      );
+    }
+
+    // ── Phase 3: Dashboard ────────────────────────────────────────────────────
+
+    function Dashboard() {
+      const [s, setS] = useState(INIT);
+      const logEl = useRef(null);
+
+      useEffect(() => {
+        if (logEl.current) logEl.current.scrollTop = logEl.current.scrollHeight;
+      }, [s.log]);
+
+      function act(name) {
+        if (s.done) return;
+        setS(prev => {
+          let { progress, debt, bugs, baseVelocity, morale, teamSize } = prev;
+          let msg;
+
+          if (name === "ship") {
+            progress += prev.velocity;
+            bugs     += 8 + prev.debt * 0.05;
+            debt     += 12;
+            morale   -= 2;
+            msg = `Sprint ${prev.sprint}  ·  Shipped fast — progress +${Math.round(prev.velocity)}. Debt and bugs crept up.`;
+          } else if (name === "refactor") {
+            debt         -= 10;
+            bugs         -= 5;
+            baseVelocity += 2;
+            morale       += 2;
+            progress     += 2;
+            msg = `Sprint ${prev.sprint}  ·  Refactored the codebase. Things are cleaner; future sprints will be faster.`;
+          } else if (name === "hire") {
+            teamSize     += 1;
+            baseVelocity += 3;
+            debt         += 3;
+            bugs         += 2;
+            morale       -= 1;
+            msg = `Sprint ${prev.sprint}  ·  New developer joined (${teamSize} total). More hands, more coordination overhead.`;
+          } else {
+            bugs     -= 10;
+            debt     -= 3;
+            progress += 4;
+            morale   += 1;
+            msg = `Sprint ${prev.sprint}  ·  Stabilized the system. Bugs squashed; team can finally breathe.`;
+          }
+
+          progress     = clamp(Math.round(progress), 0, 200);
+          debt         = clamp(Math.round(debt), 0);
+          bugs         = clamp(Math.round(bugs), 0);
+          baseVelocity = clamp(baseVelocity, 1);
+          morale       = clamp(Math.round(morale), 0, 100);
+          teamSize     = clamp(teamSize, 1);
+
+          const velocity = Math.round(calcVelocity(baseVelocity, debt, teamSize, bugs) * 10) / 10;
+          const sprint   = prev.sprint + 1;
+          const log      = [...prev.log, msg];
+          const done     = sprint > 15 || debt >= 100 || progress >= 100;
+
+          let outcome = null;
+          if (done) {
+            outcome = resolveOutcome({ progress, debt, bugs, velocity });
+            log.push(`── Final result: ${outcome.label} ──`);
+          }
+
+          return { progress, debt, bugs, velocity, baseVelocity, morale, teamSize, sprint, log, done, outcome };
+        });
+      }
+
+      const reset = () => setS({ ...INIT, log: [] });
+
+      const { progress, debt, bugs, velocity, morale, teamSize, sprint, log, done, outcome } = s;
+
+      const debtBar = debt < 30      ? "bg-emerald-500" : debt < 60    ? "bg-yellow-500" : "bg-red-500";
+      const bugBar  = bugs < 20      ? "bg-emerald-500" : bugs < 50    ? "bg-yellow-500" : "bg-red-500";
+      const velBar  = velocity >= 12 ? "bg-emerald-500" : velocity >= 6 ? "bg-yellow-500" : "bg-red-500";
+      const morBar  = morale > 70    ? "bg-emerald-500" : morale > 40  ? "bg-yellow-500" : "bg-red-500";
+
+      return (
+        <div className="min-h-screen bg-gray-950 text-white">
+          <div className="max-w-2xl mx-auto px-6 py-8">
+
+            {/* Header */}
+            <FadeUp delay={0} className="flex items-start justify-between mb-8">
+              <div>
+                <h1 className="text-xl font-bold tracking-tight text-white">Technical Debt Dashboard</h1>
+                <p className="text-gray-500 text-sm mt-0.5">Ship fast now, pay later.</p>
+              </div>
+              <button
+                onClick={reset}
+                className="text-xs text-gray-700 hover:text-gray-400 transition-colors cursor-pointer mt-1 font-medium"
+              >
+                Reset
+              </button>
+            </FadeUp>
+
+            {/* Sprint timeline */}
+            <FadeUp delay={60} className="flex items-center gap-3 mb-7">
+              <span className="text-sm text-gray-400 shrink-0 w-20 tabular-nums">
+                Sprint {sprint} / 15
+              </span>
+              <div className="flex-1 flex gap-1">
+                {Array.from({ length: 15 }, (_, i) => (
+                  <div
+                    key={i}
+                    className={`flex-1 h-2 rounded-full transition-all duration-300 ${
+                      i < sprint - 1       ? "bg-blue-500" :
+                      i === sprint - 1     ? "bg-blue-400 opacity-50" :
+                                             "bg-gray-800"
+                    }`}
+                  />
+                ))}
+              </div>
+            </FadeUp>
+
+            {/* Metrics grid */}
+            <FadeUp delay={140} className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-5">
+              <MetricCard label="Progress" value={progress} unit="%"
+                note="Project completion"
+                barPct={progress} barCls="bg-blue-500" />
+              <MetricCard label="Technical Debt" value={debt}
+                note={debt < 30 ? "Under control" : debt < 60 ? "Growing concern" : "Critical — act now"}
+                barPct={debt} barCls={debtBar} />
+              <MetricCard label="Bugs" value={bugs}
+                note={bugs < 20 ? "Manageable" : bugs < 50 ? "Piling up" : "Out of control"}
+                barPct={bugs} barCls={bugBar} />
+              <MetricCard label="Velocity" value={velocity} unit=" pts"
+                note={velocity >= 12 ? "Healthy throughput" : velocity >= 6 ? "Starting to slow" : "Critically slow"}
+                barPct={(velocity / 15) * 100} barCls={velBar} />
+              <MetricCard label="Team Size" value={teamSize} unit=" devs"
+                note={teamSize > 5 ? "High overhead" : teamSize > 3 ? "Growing" : "Lean team"}
+                barPct={(teamSize / 8) * 100} barCls="bg-purple-500" />
+              <MetricCard label="Morale" value={morale} unit="%"
+                note={morale > 70 ? "Team motivated" : morale > 40 ? "Feeling pressure" : "Burning out"}
+                barPct={morale} barCls={morBar} />
+            </FadeUp>
+
+            {/* Velocity warning */}
+            {velocity < 5 && !done && (
+              <div className="flex items-start gap-2.5 bg-red-950/40 border border-red-500/25 rounded-xl px-4 py-3 mb-4 text-red-400">
+                <span className="text-base leading-none mt-0.5 shrink-0">⚠</span>
+                <p className="text-[12px] leading-relaxed">
+                  <span className="font-semibold">Velocity critical.</span>{" "}
+                  Development is slowing down due to accumulated complexity and coordination overhead.
+                </p>
+              </div>
+            )}
+
+            {/* Actions or outcome */}
+            <FadeUp delay={220}>
+              {!done ? (
+                <div className="grid grid-cols-2 gap-3 mb-5">
+                  {ACTIONS.map(({ key, label, cls, desc, effects, insight }) => (
+                    <button
+                      key={key}
+                      onClick={() => act(key)}
+                      className={`${cls} border rounded-2xl p-4 text-left transition-all duration-200 active:scale-[0.98] cursor-pointer`}
+                    >
+                      <div className="font-semibold text-white text-sm mb-2">{label}</div>
+                      <p className="text-[12px] text-white/45 leading-snug mb-3">{desc}</p>
+                      <div className="flex flex-wrap gap-x-3 gap-y-1 mb-3">
+                        {effects.map(e => (
+                          <span key={e.label} className={`text-[11px] font-medium ${e.cls}`}>
+                            {e.dir} {e.label}
+                            {e.note && <span className="font-normal text-white/25"> {e.note}</span>}
+                          </span>
+                        ))}
+                      </div>
+                      <p className="text-[11px] text-white/30 italic leading-relaxed border-t border-white/[0.07] pt-2.5">
+                        {insight}
+                      </p>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className={`border rounded-2xl p-5 mb-5 ${outcome.cls}`}>
+                  <div className="font-bold text-base mb-1">{outcome.label}</div>
+                  <div className="text-sm opacity-70 mb-4 leading-relaxed">{outcome.sub}</div>
+                  <button
+                    onClick={reset}
+                    className="bg-white/10 hover:bg-white/20 border border-white/10 transition-all px-5 py-2 rounded-xl text-sm font-semibold cursor-pointer"
+                  >
+                    Start New Project →
+                  </button>
+                </div>
+              )}
+            </FadeUp>
+
+            {/* Sprint log */}
+            <FadeUp delay={300} className="bg-gray-900/60 border border-gray-800/80 rounded-2xl p-4 backdrop-blur-sm">
+              <div className="text-[10px] font-semibold text-gray-500 uppercase tracking-widest mb-3">
+                Sprint Log
+              </div>
+              <div ref={logEl} className="max-h-40 overflow-y-auto space-y-1 pr-1">
+                {log.length === 0 ? (
+                  <p className="text-gray-600 text-sm italic">No events yet. Choose an action above to begin.</p>
+                ) : (
+                  log.map((line, i) => (
+                    <div
+                      key={i}
+                      className={`text-sm px-3 py-1.5 rounded-xl transition-colors ${
+                        i === log.length - 1 ? "bg-gray-800/80 text-gray-100" : "text-gray-500"
+                      }`}
+                    >
+                      {line}
+                    </div>
+                  ))
+                )}
+              </div>
+            </FadeUp>
+
+            <p className="text-center text-[11px] text-gray-700 mt-5">
+              15 sprints to ship your project — every decision has consequences
+            </p>
+
+            <MetricsGuide />
+
+          </div>
+        </div>
+      );
+    }
+
+    // ── Root app — manages phase transitions ──────────────────────────────────
+
+    function App() {
+      const [phase, setPhase] = useState("intro");
+      const [opacity, setOpacity] = useState(1);
+
+      function goTo(next) {
+        setOpacity(0);
+        setTimeout(() => {
+          setPhase(next);
+          setTimeout(() => setOpacity(1), 40);
+        }, 280);
+      }
+
+      return (
+        <div style={{ opacity, transition: "opacity 0.28s ease" }}>
+          {phase === "intro"     && <IntroScreen    onNext={() => goTo("elements")}  />}
+          {phase === "elements"  && <ElementsScreen onNext={() => goTo("dashboard")} />}
+          {phase === "dashboard" && <Dashboard />}
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>
